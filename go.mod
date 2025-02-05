@@ -1,10 +1,11 @@
 module github.com/gateway-fm/zkevm-data-streamer
 
-go 1.21
-toolchain go1.24.1
+go 1.22
+
+toolchain go1.23.5
 
 require (
-	github.com/ethereum/go-ethereum v1.14.8
+	github.com/ethereum/go-ethereum v1.14.13
 	github.com/hermeznetwork/tracerr v0.3.2
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/spf13/viper v1.16.0
@@ -34,10 +35,10 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/crypto v0.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
+	golang.org/x/crypto v0.22.0 // indirect
+	golang.org/x/sys v0.22.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
