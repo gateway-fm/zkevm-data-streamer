@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/0xPolygonHermez/zkevm-data-streamer/datastream"
-	"github.com/0xPolygonHermez/zkevm-data-streamer/datastreamer"
-	"github.com/0xPolygonHermez/zkevm-data-streamer/log"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/gateway-fm/zkevm-data-streamer/datastream"
+	"github.com/gateway-fm/zkevm-data-streamer/datastreamer"
+	"github.com/gateway-fm/zkevm-data-streamer/log"
 	"github.com/urfave/cli/v2"
 	"google.golang.org/protobuf/proto"
 )
