@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0xPolygonHermez/zkevm-data-streamer/log"
+	"github.com/gateway-fm/zkevm-data-streamer/log"
 )
 
 // Command type for the TCP client commands

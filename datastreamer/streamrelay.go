@@ -3,7 +3,7 @@ package datastreamer
 import (
 	"time"
 
-	"github.com/0xPolygonHermez/zkevm-data-streamer/log"
+	"github.com/gateway-fm/zkevm-data-streamer/log"
 )
 
 // StreamRelay type to manage a data stream relay

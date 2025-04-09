@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/0xPolygonHermez/zkevm-data-streamer"
+	"github.com/gateway-fm/zkevm-data-streamer"
 	"github.com/hermeznetwork/tracerr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
