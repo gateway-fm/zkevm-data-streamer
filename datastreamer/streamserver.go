@@ -50,6 +50,7 @@ const (
 	CmdStartBookmark                    // CmdStartBookmark for the start from bookmark TCP client command
 	CmdEntry                            // CmdEntry for the get entry TCP client command
 	CmdBookmark                         // CmdBookmark for the get bookmark TCP client command
+	CmdNoop                             // CmdNoop for the keep-alive TCP client command
 )
 
 const (
@@ -94,6 +95,7 @@ var (
 		CmdStartBookmark: "StartBookmark",
 		CmdEntry:         "Entry",
 		CmdBookmark:      "Bookmark",
+		CmdNoop:          "Noop",
 	}
 
 	// StrCommandErrors for TCP command errors description
@@ -788,6 +790,9 @@ func (s *StreamServer) processCommand(command Command, client *client) error {
 	case CmdBookmark:
 		err = s.handleBookmarkCommand(cli)
 
+	case CmdNoop:
+		err = s.sendResultEntry(uint32(CmdErrOK), StrCommandErrors[CmdErrOK], client)
+
 	default:
 		log.Error("Invalid command!")
 		err = ErrInvalidCommand
@@ -1281,7 +1286,7 @@ func PrintResultEntry(e ResultEntry) {
 
 // IsACommand checks if a command is a valid command
 func (c Command) IsACommand() bool {
-	return c >= CmdStart && c <= CmdBookmark
+	return c >= CmdStart && c <= CmdNoop
 }
 
 // TimeoutWrite sets a deadline time before write

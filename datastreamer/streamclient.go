@@ -179,6 +179,12 @@ func (c *StreamClient) ExecCommandGetBookmark(fromBookmark []byte) (FileEntry, e
 	return entry, err
 }
 
+// ExecCommandNoop executes client TCP command to keep connection alive
+func (c *StreamClient) ExecCommandNoop() error {
+	_, _, err := c.execCommand(CmdNoop, false, 0, nil)
+	return err
+}
+
 // execCommand executes a valid client TCP command with deferred command result possibility
 func (c *StreamClient) execCommand(cmd Command, deferredResult bool,
 	fromEntry uint64, fromBookmark []byte) (HeaderEntry, FileEntry, error) {
@@ -249,6 +255,8 @@ func (c *StreamClient) execCommand(cmd Command, deferredResult bool,
 		if err != nil {
 			return header, entry, err
 		}
+	case CmdNoop:
+		// No parameters needed for Noop command
 	}
 
 	// Get the command result
@@ -284,6 +292,8 @@ func (c *StreamClient) execCommand(cmd Command, deferredResult bool,
 			return header, entry, ErrBookmarkNotFound
 		}
 		entry = e
+	case CmdNoop:
+		// No specific data response for Noop command
 	}
 
 	return header, entry, nil
