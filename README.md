@@ -120,6 +120,15 @@ Command format sent by the client:
 
 If streaming already started or `bookmarkLength` exceeds the maximum length, terminates the connection.
 
+### Noop
+Sends a No-Operation command to the server. This is useful for keeping the TCP connection alive, preventing it from being closed due to inactivity by network intermediaries or the server's own inactivity timeout.
+
+Command format sent by the client:
+>u64 command = 7
+>u64 streamType // e.g. 1:Sequencer
+
+This command takes no additional parameters and only returns the standard Result entry.
+
 ### RESULT FORMAT (ResultEntry)
 Remember that all these TCP commands firstly return a response in the following detailed format:
 >u8 packetType // 0xff:Result  
