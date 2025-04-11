@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xPolygonHermez/zkevm-data-streamer/datastreamer"
-	"github.com/0xPolygonHermez/zkevm-data-streamer/log"
+	"github.com/gateway-fm/zkevm-data-streamer/datastreamer"
+	"github.com/gateway-fm/zkevm-data-streamer/log"
 	"github.com/stretchr/testify/require"
 )
 

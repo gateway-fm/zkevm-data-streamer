@@ -1,4 +1,4 @@
-module github.com/0xPolygonHermez/zkevm-data-streamer
+module github.com/gateway-fm/zkevm-data-streamer
 
 go 1.21
 
