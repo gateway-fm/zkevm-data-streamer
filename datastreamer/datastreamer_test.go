@@ -96,7 +96,7 @@ func (t TestBookmark) Encode() []byte {
 var (
 	config = datastreamer.Config{
 		Port:     6900,
-		Filename: "/tmp/datastreamer_test.bin",
+		Filename: "tmp/datastreamer_test.bin",
 		Log: log.Config{
 			Environment: "development",
 			Level:       "debug",
@@ -197,15 +197,15 @@ func deleteFiles() error {
 }
 
 func TestServer(t *testing.T) {
+	// Note: TestClient depends on the state created by TestServer
+	// TODO: Refactor tests to be independent of each other
 	err := deleteFiles()
-	if err != nil {
-		panic(err)
-	}
-	streamServer, err = datastreamer.NewServer(config.Port, 1, 137, streamType,
+	require.NoError(t, err)
+
+	// Create server
+	streamServer, err := datastreamer.NewServer(config.Port, 1, 137, streamType,
 		config.Filename, config.WriteTimeout, config.InactivityTimeout, 5*time.Second, &config.Log)
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 
 	// Case: Add entry without starting atomic operation -> FAIL
 	entryNumber, err := streamServer.AddStreamEntry(entryType1, testEntries[1].Encode())
@@ -467,6 +467,12 @@ func TestServer(t *testing.T) {
 }
 
 func TestClient(t *testing.T) {
+	// Note: TestClient depends on the state created by TestServer
+	t.Cleanup(func() {
+		err := deleteFiles()
+		require.NoError(t, err)
+	})
+
 	var fromBookmark []byte
 	var fromEntry uint64
 	var entry datastreamer.FileEntry

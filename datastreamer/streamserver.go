@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,15 +192,23 @@ func NewServer(port uint16, version uint8, systemID uint64, streamType StreamTyp
 		stream: make(chan streamAO, streamBuffer),
 	}
 
+	// Get the directory and filename separately
+	dir := filepath.Dir(s.fileName)
+	base := filepath.Base(s.fileName)
+
 	// Add file extension if not present
-	ind := strings.IndexRune(s.fileName, '.')
-	if ind == -1 {
+	if filepath.Ext(s.fileName) == "" {
 		s.fileName += ".bin"
 	}
 
 	// Initialize the logger
 	if cfg != nil {
 		log.Init(*cfg)
+	}
+
+	// File does not exists so create it
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return nil, err
 	}
 
 	// Open (or create) the data stream file
@@ -212,8 +221,11 @@ func NewServer(port uint16, version uint8, systemID uint64, streamType StreamTyp
 	// Initialize the data entry number
 	s.nextEntry = s.streamFile.header.TotalEntries
 
+	// Remove any extension from the base filename and add .db
+	baseWithoutExt := strings.TrimSuffix(base, filepath.Ext(base))
+
 	// Open (or create) the bookmarks DB
-	name := s.fileName[:strings.LastIndex(s.fileName, ".")] + ".db"
+	name := filepath.Join(dir, baseWithoutExt+".db")
 	s.bookmark, err = NewBookmark(name)
 	if err != nil {
 		return &s, err
