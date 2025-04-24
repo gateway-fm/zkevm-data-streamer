@@ -45,13 +45,13 @@ const (
 )
 
 const (
-	CmdStart            Command = iota + 1 // CmdStart for the start from entry TCP client command
-	CmdStop                                // CmdStop for the stop TCP client command
-	CmdHeader                              // CmdHeader for the header TCP client command
-	CmdStartBookmark                       // CmdStartBookmark for the start from bookmark TCP client command
-	CmdStartEndBookmark                    // CmdStartEndBookmark for the start and end from bookmark TCP client command
-	CmdEntry                               // CmdEntry for the get entry TCP client command
-	CmdBookmark                            // CmdBookmark for the get bookmark TCP client command
+	CmdStart         Command = iota + 1 // CmdStart for the start from entry TCP client command
+	CmdStop                             // CmdStop for the stop TCP client command
+	CmdHeader                           // CmdHeader for the header TCP client command
+	CmdStartBookmark                    // CmdStartBookmark for the start from bookmark TCP client command
+	CmdEntry                            // CmdEntry for the get entry TCP client command
+	CmdBookmark                         // CmdBookmark for the get bookmark TCP client command
+	CmdRangeBookmark                    // CmdRangeBookmark for the start and end bookmarks TCP client command
 )
 
 const (
@@ -91,13 +91,13 @@ var (
 
 	// StrCommand for TCP commands description
 	StrCommand = map[Command]string{
-		CmdStart:            "Start",
-		CmdStop:             "Stop",
-		CmdHeader:           "Header",
-		CmdStartBookmark:    "StartBookmark",
-		CmdStartEndBookmark: "CmdStartEndBookmark",
-		CmdEntry:            "Entry",
-		CmdBookmark:         "Bookmark",
+		CmdStart:         "Start",
+		CmdStop:          "Stop",
+		CmdHeader:        "Header",
+		CmdStartBookmark: "StartBookmark",
+		CmdEntry:         "Entry",
+		CmdBookmark:      "Bookmark",
+		CmdRangeBookmark: "CmdRangeBookmark",
 	}
 
 	// StrCommandErrors for TCP command errors description
@@ -792,9 +792,6 @@ func (s *StreamServer) processCommand(command Command, client *client) error {
 	case CmdStartBookmark:
 		err = s.handleStartBookmarkCommand(cli)
 
-	case CmdStartEndBookmark:
-		err = s.handleStartEndBookmarkCommand(cli)
-
 	case CmdStop:
 		err = s.handleStopCommand(cli)
 
@@ -806,6 +803,9 @@ func (s *StreamServer) processCommand(command Command, client *client) error {
 
 	case CmdBookmark:
 		err = s.handleBookmarkCommand(cli)
+
+	case CmdRangeBookmark:
+		err = s.handleRangeBookmarkCommand(cli)
 
 	default:
 		log.Error("Invalid command!")
@@ -850,8 +850,8 @@ func (s *StreamServer) handleStartBookmarkCommand(cli *client) error {
 	return err
 }
 
-// handleStartEndBookmarkCommand processes the CmdStartEndBookmark command
-func (s *StreamServer) handleStartEndBookmarkCommand(cli *client) error {
+// handleRangeBookmarkCommand processes the CmdRangeBookmark command
+func (s *StreamServer) handleRangeBookmarkCommand(cli *client) error {
 	if cli.status != csStopped {
 		log.Error("Stream to client already started!")
 		_ = s.sendResultEntry(uint32(CmdErrAlreadyStarted), StrCommandErrors[CmdErrAlreadyStarted], cli)
@@ -859,7 +859,7 @@ func (s *StreamServer) handleStartEndBookmarkCommand(cli *client) error {
 	}
 
 	cli.status = csSyncing
-	err := s.processCmdStartEndBookmark(cli)
+	err := s.processCmdRangeBookmark(cli)
 	if err == nil {
 		cli.status = csStopped
 	}
@@ -994,7 +994,7 @@ func (s *StreamServer) processCmdStartBookmark(client *client) error {
 	return err
 }
 
-func (s *StreamServer) processCmdStartEndBookmark(client *client) error {
+func (s *StreamServer) processCmdRangeBookmark(client *client) error {
 	// Read start and end bookmark parameter
 	sb, err := readBookmark(client)
 	if err != nil {
@@ -1004,18 +1004,18 @@ func (s *StreamServer) processCmdStartEndBookmark(client *client) error {
 	if err != nil {
 		return err
 	}
-	log.Debugf("Client %s command StartEndBookmark start: [%v], end [%v]", client.clientID, sb, eb)
+	log.Debugf("Client %s command RangeBookmark start: [%v], end [%v]", client.clientID, sb, eb)
 
 	from, err := s.bookmark.GetBookmark(sb)
 	if err != nil {
-		log.Errorf("StartEndBookmark command invalid start bookmark %v for client %s: %v", sb, client.clientID, err)
+		log.Errorf("RangeBookmark command invalid start bookmark %v for client %s: %v", sb, client.clientID, err)
 		err = ErrStartBookmarkInvalidParamFromBookmark
 		_ = s.sendResultEntry(uint32(CmdErrBadFromBookmark), StrCommandErrors[CmdErrBadFromBookmark], client)
 		return err
 	}
 	to, err := s.bookmark.GetBookmark(eb)
 	if err != nil || to == 0 {
-		log.Errorf("StartEndBookmark command invalid end bookmark %v for client %s: %v", eb, client.clientID, err)
+		log.Errorf("RangeBookmark command invalid end bookmark %v for client %s: %v", eb, client.clientID, err)
 		err = ErrEndBookmarkInvalidParamToBookmark
 		_ = s.sendResultEntry(uint32(CmdErrBadToBookmark), StrCommandErrors[CmdErrBadToBookmark], client)
 		return err
