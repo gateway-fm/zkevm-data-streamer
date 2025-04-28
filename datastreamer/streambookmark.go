@@ -8,6 +8,17 @@ import (
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
+type BookmarkStore interface {
+	// AddBookmark inserts or updates a bookmark
+	AddBookmark(bookmark []byte, entryNum uint64) error
+	// GetBookmark gets a bookmark value
+	GetBookmark(bookmark []byte) (uint64, error)
+	// PrintDump prints all bookmarks stored in the database
+	PrintDump() error
+	// Close closes the bookmark database
+	Close() error
+}
+
 // StreamBookmark type to manage index of bookmarks
 type StreamBookmark struct {
 	dbName string

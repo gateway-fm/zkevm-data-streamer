@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 // Command type for the TCP client commands
 type Command uint64
 
-// ClientStatus type for the status of the client
+// ClientStatus type for the Status of the client
 type ClientStatus uint64
 
 // AOStatus type for the atomic operation internal states
@@ -65,7 +64,7 @@ const (
 )
 
 const (
-	// Client status
+	// Client Status
 	csSyncing ClientStatus = iota + 1
 	csSynced
 	csStopped
@@ -73,7 +72,7 @@ const (
 )
 
 const (
-	// Atomic operation status
+	// Atomic operation Status
 	aoNone AOStatus = iota + 1
 	aoStarted
 	aoCommitting
@@ -81,7 +80,7 @@ const (
 )
 
 var (
-	// StrClientStatus for client status description
+	// StrClientStatus for client Status description
 	StrClientStatus = map[ClientStatus]string{
 		csSyncing: "Syncing",
 		csSynced:  "Synced",
@@ -112,6 +111,37 @@ var (
 	}
 )
 
+type StreamStore interface {
+	AddStreamEntry(entryType EntryType, data []byte) (uint64, error)
+	AddStreamBookmark(data []byte) (uint64, error)
+	GetHeader() HeaderEntry
+	GetNextEntry() uint64
+	GetEntry(entryNum uint64) (FileEntry, error)
+	GetBookmark(bookmark []byte) (uint64, error)
+
+	StartAtomicOp() error
+	CommitAtomicOp() error
+	RollbackAtomicOp() error
+
+	WriteHeaderEntry() error
+	TruncateFile(num uint64) error
+	GetIterator(entryNum uint64, readOnly bool) (StorageIterator, error)
+	UpdateEntryData(entryNum uint64, entryType EntryType, data []byte) error
+	PrintDumpBookmarks() error
+	Close() error
+
+	// SetStreamChannel passes the stream channel to the StreamStore for internal use
+	SetStreamChannel(chan StreamAO)
+}
+
+type StorageIterator interface {
+	Next() (bool, error)
+	End()
+	GetEntry() FileEntry
+}
+type StreamBookmarkStore interface {
+}
+
 // StreamServer type to manage a data stream server
 type StreamServer struct {
 	port              uint16        // Server stream port
@@ -130,20 +160,51 @@ type StreamServer struct {
 	clients      map[string]*client
 	mutexClients sync.RWMutex // Mutex for write access to clients map
 
-	nextEntry uint64 // Next sequential entry number
 	initEntry uint64 // Only used by the relay (initial next entry in the master server)
 
-	atomicOp   streamAO      // Current in progress (if any) atomic operation
-	stream     chan streamAO // Channel to stream committed atomic operations
-	streamFile *StreamFile
-	bookmark   *StreamBookmark
+	atomicOp    StreamAO      // Current in progress (if any) atomic operation
+	stream      chan StreamAO // Channel to stream committed atomic operations
+	streamStore StreamStore
+}
+
+func (s *StreamServer) SetStreamChannel(chan StreamAO) {
+	s.streamStore.SetStreamChannel(s.stream)
+}
+
+func (s *StreamServer) AddStreamEntry(entryType EntryType, data []byte) (uint64, error) {
+	return s.streamStore.AddStreamEntry(entryType, data)
+}
+
+func (s *StreamServer) AddStreamBookmark(data []byte) (uint64, error) {
+	return s.streamStore.AddStreamBookmark(data)
+}
+
+func (s *StreamServer) GetNextEntry() uint64 {
+	return s.streamStore.GetNextEntry()
+}
+
+func (s *StreamServer) WriteHeaderEntry() error {
+	return s.streamStore.WriteHeaderEntry()
+}
+
+func (s *StreamServer) GetIterator(entryNum uint64, readOnly bool) (StorageIterator, error) {
+	return s.streamStore.GetIterator(entryNum, readOnly)
+}
+
+func (s *StreamServer) PrintDumpBookmarks() error {
+	return s.streamStore.PrintDumpBookmarks()
+}
+
+func (s *StreamServer) Close() error {
+	//TODO implement me
+	panic("implement me")
 }
 
 // streamAO type to manage atomic operations
-type streamAO struct {
-	status     AOStatus
-	startEntry uint64
-	entries    []FileEntry
+type StreamAO struct {
+	Status     AOStatus
+	StartEntry uint64
+	Entries    []FileEntry
 }
 
 // client type for the server to manage clients
@@ -170,7 +231,7 @@ type ResultEntry struct {
 // NewServer creates a new data stream server
 func NewServer(port uint16, version uint8, systemID uint64, streamType StreamType, fileName string,
 	writeTimeout time.Duration, inactivityTimeout time.Duration, inactivityCheckInterval time.Duration,
-	cfg *log.Config) (*StreamServer, error) {
+	cfg *log.Config, storageFactory func() (StreamStore, error)) (*StreamServer, error) {
 	// Create the server data stream
 	s := StreamServer{
 		port:                    port,
@@ -185,20 +246,15 @@ func NewServer(port uint16, version uint8, systemID uint64, streamType StreamTyp
 		streamType: streamType,
 		ln:         nil,
 		clients:    make(map[string]*client),
-		nextEntry:  0,
 		initEntry:  0,
 
-		atomicOp: streamAO{
-			status:     aoNone,
-			startEntry: 0,
-			entries:    []FileEntry{},
+		atomicOp: StreamAO{
+			Status:     aoNone,
+			StartEntry: 0,
+			Entries:    []FileEntry{},
 		},
-		stream: make(chan streamAO, streamBuffer),
+		stream: make(chan StreamAO, streamBuffer),
 	}
-
-	// Get the directory and filename separately
-	dir := filepath.Dir(s.fileName)
-	base := filepath.Base(s.fileName)
 
 	// Add file extension if not present
 	if filepath.Ext(s.fileName) == "" {
@@ -210,29 +266,16 @@ func NewServer(port uint16, version uint8, systemID uint64, streamType StreamTyp
 		log.Init(*cfg)
 	}
 
-	// File does not exists so create it
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return nil, err
-	}
-
 	// Open (or create) the data stream file
 	var err error
-	s.streamFile, err = NewStreamFile(s.fileName, version, systemID, s.streamType)
-	if err != nil {
-		return nil, err
+	if storageFactory != nil {
+		s.streamStore, err = storageFactory()
+	} else {
+		s.streamStore, err = NewStreamFile(s.fileName, version, systemID, s.streamType)
 	}
 
-	// Initialize the data entry number
-	s.nextEntry = s.streamFile.header.TotalEntries
-
-	// Remove any extension from the base filename and add .db
-	baseWithoutExt := strings.TrimSuffix(base, filepath.Ext(base))
-
-	// Open (or create) the bookmarks DB
-	name := filepath.Join(dir, baseWithoutExt+".db")
-	s.bookmark, err = NewBookmark(name)
 	if err != nil {
-		return &s, err
+		return nil, err
 	}
 
 	return &s, nil
@@ -247,6 +290,9 @@ func (s *StreamServer) Start() error {
 		log.Errorf("Error creating datastream server %d: %v", s.port, err)
 		return err
 	}
+
+	// Pass stream channel to the StreamStore for internal use
+	s.streamStore.SetStreamChannel(s.stream)
 
 	// Goroutine to broadcast committed atomic operations
 	go s.broadcastAtomicOp()
@@ -307,7 +353,7 @@ func (s *StreamServer) waitConnections() {
 			continue
 		}
 
-		// Goroutine to manage client (command requests and entries stream)
+		// Goroutine to manage client (command requests and Entries stream)
 		go s.handleConnection(conn)
 	}
 }
@@ -371,124 +417,49 @@ func (s *StreamServer) handleConnection(conn net.Conn) {
 
 // StartAtomicOp starts a new atomic operation
 func (s *StreamServer) StartAtomicOp() error {
-	start := time.Now().UnixNano()
-	defer log.Debugf("StartAtomicOp process time: %vns", time.Now().UnixNano()-start)
 
-	log.Debugf("!AtomicOp START (%d)", s.nextEntry)
-	// Check status of the server
+	// Check Status of the server
 	if !s.started {
 		log.Errorf("AtomicOp not allowed. Server is not started")
 		return ErrAtomicOpNotAllowed
 	}
-	// Check status of the atomic operation
-	if s.atomicOp.status == aoStarted {
-		log.Errorf("AtomicOp already started and in progress after entry %d", s.atomicOp.startEntry)
-		return ErrStartAtomicOpNotAllowed
+
+	// Delegate atomic operation management to StreamFile
+	err := s.streamStore.StartAtomicOp()
+	if err != nil {
+		return err
 	}
 
-	s.atomicOp.status = aoStarted
-	s.atomicOp.startEntry = s.nextEntry
+	// Set server state to track atomic operation
+	s.atomicOp.Status = aoStarted
+	s.atomicOp.StartEntry = s.streamStore.GetNextEntry()
+	s.atomicOp.Entries = []FileEntry{}
+
 	return nil
-}
-
-// AddStreamEntry adds a new entry in the current atomic operation
-func (s *StreamServer) AddStreamEntry(etype EntryType, data []byte) (uint64, error) {
-	start := time.Now().UnixNano()
-	defer log.Debugf("AddStreamEntry process time: %vns", time.Now().UnixNano()-start)
-
-	// Add to the stream file
-	entryNum, err := s.addStream("Data", etype, data)
-
-	return entryNum, err
-}
-
-// AddStreamBookmark adds a new bookmark in the current atomic operation
-func (s *StreamServer) AddStreamBookmark(bookmark []byte) (uint64, error) {
-	start := time.Now().UnixNano()
-	defer log.Debugf("AddStreamBookmark process time: %vns", time.Now().UnixNano()-start)
-
-	// Add to the stream file
-	entryNum, err := s.addStream("Bookmark", EtBookmark, bookmark)
-	if err != nil {
-		return 0, err
-	}
-
-	// Add to the bookmark index
-	err = s.bookmark.AddBookmark(bookmark, entryNum)
-	if err != nil {
-		return entryNum, err
-	}
-
-	return entryNum, nil
-}
-
-// addStream adds a new stream entry in the current atomic operation
-func (s *StreamServer) addStream(desc string, etype EntryType, data []byte) (uint64, error) {
-	// Check atomic operation status
-	if s.atomicOp.status != aoStarted {
-		log.Errorf("Add stream entry not allowed, AtomicOp is not started")
-		return 0, ErrAddEntryNotAllowed
-	}
-
-	// Generate data entry
-	e := FileEntry{
-		packetType: PtData,
-		Length:     1 + 4 + 4 + 8 + uint32(len(data)),
-		Type:       etype,
-		Number:     s.nextEntry,
-		Data:       data,
-	}
-
-	// Log data entry fields
-	log.Debugf("%s entry: %d | %d | %d | %d | %d", desc, e.Number, e.packetType, e.Length, e.Type, len(data))
-
-	// Update header (in memory) and write data entry into the file
-	err := s.streamFile.AddFileEntry(e)
-	if err != nil {
-		return 0, nil
-	}
-
-	// Save the entry in the atomic operation in progress
-	s.atomicOp.entries = append(s.atomicOp.entries, e)
-
-	// Increase sequential entry number
-	s.nextEntry++
-
-	return e.Number, nil
 }
 
 // CommitAtomicOp commits the current atomic operation and streams it to the clients
 func (s *StreamServer) CommitAtomicOp() error {
 	start := time.Now()
 
-	log.Debugf("committing datastream atomic operation, startEntry: %d", s.atomicOp.startEntry)
-	if s.atomicOp.status != aoStarted {
+	log.Debugf("committing datastream atomic operation, StartEntry: %d", s.atomicOp.StartEntry)
+	if s.atomicOp.Status != aoStarted {
 		log.Errorf("commit not allowed, atomic operation is not in the started state")
 		return ErrCommitNotAllowed
 	}
 
-	s.atomicOp.status = aoCommitting
+	s.atomicOp.Status = aoCommitting
 
-	// Update header into the file (commit the new entries)
-	err := s.streamFile.writeHeaderEntry()
+	// Delegate commit to StreamFile
+	err := s.streamStore.CommitAtomicOp()
 	if err != nil {
 		return err
 	}
 
-	// Do broadcast of the committed atomic operation to the stream clients
-	atomic := streamAO{
-		status:     s.atomicOp.status,
-		startEntry: s.atomicOp.startEntry,
-	}
-	atomic.entries = make([]FileEntry, len(s.atomicOp.entries))
-	copy(atomic.entries, s.atomicOp.entries)
-
-	s.stream <- atomic
-
 	// No atomic operation in progress
 	s.clearAtomicOp()
 
-	log.Debugf("committed datastream atomic operation, startEntry: %d, time: %v", s.atomicOp.startEntry, time.Since(start))
+	log.Debugf("committed datastream atomic operation, StartEntry: %d, time: %v", s.atomicOp.StartEntry, time.Since(start))
 
 	return nil
 }
@@ -498,22 +469,19 @@ func (s *StreamServer) RollbackAtomicOp() error {
 	start := time.Now().UnixNano()
 	defer log.Debugf("RollbackAtomicOp process time: %vns", time.Now().UnixNano()-start)
 
-	log.Debugf("rollback datastream atomic operation, startEntry: %d", s.atomicOp.startEntry)
-	if s.atomicOp.status != aoStarted {
+	log.Debugf("rollback datastream atomic operation, StartEntry: %d", s.atomicOp.StartEntry)
+	if s.atomicOp.Status != aoStarted {
 		log.Errorf("Rollback not allowed, AtomicOp is not in the started state")
 		return ErrRollbackNotAllowed
 	}
 
-	s.atomicOp.status = aoRollbacking
+	s.atomicOp.Status = aoRollbacking
 
-	// Restore header in memory (discard current) from the file header (rollback entries)
-	err := s.streamFile.rollbackHeader()
+	// Delegate rollback to StreamFile
+	err := s.streamStore.RollbackAtomicOp()
 	if err != nil {
 		return err
 	}
-
-	// Rollback the entry number
-	s.nextEntry = s.atomicOp.startEntry
 
 	// No atomic operation in progress
 	s.clearAtomicOp()
@@ -524,32 +492,29 @@ func (s *StreamServer) RollbackAtomicOp() error {
 // TruncateFile truncates stream data file from an entry number onwards
 func (s *StreamServer) TruncateFile(entryNum uint64) error {
 	// Check the entry number
-	if entryNum >= s.nextEntry {
+	if entryNum >= s.streamStore.GetNextEntry() {
 		log.Errorf("Invalid entry number [%d], it doesn't exist", entryNum)
 		return ErrInvalidEntryNumber
 	}
 
 	// Check atomic operation is not in progress
-	if s.atomicOp.status != aoNone {
+	if s.atomicOp.Status != aoNone {
 		log.Errorf("Truncate not allowed, atomic operation in progress")
 		return ErrTruncateNotAllowed
 	}
 
 	// Log previous header
-	PrintHeaderEntry(s.streamFile.header, "(before truncate)")
+	PrintHeaderEntry(s.streamStore.GetHeader(), "(before truncate)")
 
-	// Truncate entries in the file
-	err := s.streamFile.truncateFile(entryNum)
+	// Truncate Entries in the file
+	err := s.streamStore.TruncateFile(entryNum)
 	if err != nil {
 		return err
 	}
 
-	// Update entry number sequence
-	s.nextEntry = s.streamFile.header.TotalEntries
-
 	// Log current header
-	log.Infof("File truncated! Removed entries from %d (included) until end of file", entryNum)
-	PrintHeaderEntry(s.streamFile.header, "(after truncate)")
+	log.Infof("File truncated! Removed Entries from %d (included) until end of file", entryNum)
+	PrintHeaderEntry(s.streamStore.GetHeader(), "(after truncate)")
 
 	return nil
 }
@@ -557,19 +522,19 @@ func (s *StreamServer) TruncateFile(entryNum uint64) error {
 // UpdateEntryData updates the internal data of an entry
 func (s *StreamServer) UpdateEntryData(entryNum uint64, etype EntryType, data []byte) error {
 	// Check the entry number
-	if entryNum >= s.nextEntry {
+	if entryNum >= s.streamStore.GetNextEntry() {
 		log.Errorf("Invalid entry number [%d], it doesn't exist", entryNum)
 		return ErrInvalidEntryNumber
 	}
 
 	// Check entry not in current atomic operation
-	if s.atomicOp.status != aoNone && entryNum >= s.atomicOp.startEntry {
+	if s.atomicOp.Status != aoNone && entryNum >= s.atomicOp.StartEntry {
 		log.Errorf("Entry number [%d] not allowed for update, it's in the current atomic operation", entryNum)
 		return ErrUpdateNotAllowed
 	}
 
 	// Update entry data in the stream file
-	err := s.streamFile.updateEntryData(entryNum, etype, data)
+	err := s.streamStore.UpdateEntryData(entryNum, etype, data)
 	if err != nil {
 		return err
 	}
@@ -580,33 +545,18 @@ func (s *StreamServer) UpdateEntryData(entryNum uint64, etype EntryType, data []
 // GetHeader returns the current committed header
 func (s *StreamServer) GetHeader() HeaderEntry {
 	// Get current file header
-	header := s.streamFile.getHeaderEntry()
+	header := s.streamStore.GetHeader()
 	return header
 }
 
 // GetEntry searches in the stream file and returns the data for the requested entry
 func (s *StreamServer) GetEntry(entryNum uint64) (FileEntry, error) {
-	// Initialize file stream iterator
-	iterator, err := s.streamFile.iteratorFrom(entryNum, true)
-	if err != nil {
-		return FileEntry{}, err
-	}
-
-	// Get requested entry data
-	_, err = s.streamFile.iteratorNext(iterator)
-	if err != nil {
-		return FileEntry{}, err
-	}
-
-	// Close iterator
-	s.streamFile.iteratorEnd(iterator)
-
-	return iterator.Entry, nil
+	return s.streamStore.GetEntry(entryNum)
 }
 
 // GetBookmark returns the entry number pointed by the bookmark
 func (s *StreamServer) GetBookmark(bookmark []byte) (uint64, error) {
-	return s.bookmark.GetBookmark(bookmark)
+	return s.streamStore.GetBookmark(bookmark)
 }
 
 // GetFirstEventAfterBookmark searches in the stream file by bookmark and returns the first event entry data
@@ -615,32 +565,32 @@ func (s *StreamServer) GetFirstEventAfterBookmark(bookmark []byte) (FileEntry, e
 	entry := FileEntry{}
 
 	// Get entry of the bookmark
-	entryNum, err := s.bookmark.GetBookmark(bookmark)
+	entryNum, err := s.streamStore.GetBookmark(bookmark)
 	if err != nil {
 		return entry, err
 	}
 
 	// Initialize file stream iterator from bookmark's entry
-	iterator, err := s.streamFile.iteratorFrom(entryNum, true)
+	iterator, err := s.streamStore.GetIterator(entryNum, true)
 	if err != nil {
 		return entry, err
 	}
 
-	// Loop until find the first event entry (skip bookmarks entries)
+	// Loop until find the first event entry (skip bookmarks Entries)
 	for {
 		// Get next entry data
-		end, err := s.streamFile.iteratorNext(iterator)
+		end, err := iterator.Next()
 
 		// Loop break conditions (error, end of file, entry type different from bookmark)
-		if err != nil || end || iterator.Entry.Type != EtBookmark {
+		if err != nil || end || iterator.GetEntry().Type != EtBookmark {
 			break
 		}
 	}
 
 	// Close iterator
-	s.streamFile.iteratorEnd(iterator)
+	iterator.End()
 
-	return iterator.Entry, err
+	return iterator.GetEntry(), nil
 }
 
 // GetDataBetweenBookmarks returns the data between two bookmarks
@@ -649,13 +599,13 @@ func (s *StreamServer) GetDataBetweenBookmarks(bookmarkFrom, bookmarkTo []byte) 
 	var response []byte
 
 	// Get entry of the from bookmark
-	fromEntryNum, err := s.bookmark.GetBookmark(bookmarkFrom)
+	fromEntryNum, err := s.streamStore.GetBookmark(bookmarkFrom)
 	if err != nil {
 		return response, err
 	}
 
 	// Get entry of the to bookmark
-	toEntryNum, err := s.bookmark.GetBookmark(bookmarkTo)
+	toEntryNum, err := s.streamStore.GetBookmark(bookmarkTo)
 	if err != nil {
 		return response, err
 	}
@@ -666,43 +616,49 @@ func (s *StreamServer) GetDataBetweenBookmarks(bookmarkFrom, bookmarkTo []byte) 
 	}
 
 	// Initialize file stream iterator from bookmark's entry
-	iterator, err := s.streamFile.iteratorFrom(fromEntryNum, true)
+	iterator, err := s.streamStore.GetIterator(fromEntryNum, true)
 	if err != nil {
 		return response, err
 	}
 
 	// Loop until we reach the to bookmark
 	for {
-		// Get next entry data
-		end, err := s.streamFile.iteratorNext(iterator)
+		end, err := iterator.Next()
+		if err != nil {
+			return response, err
+		}
 
-		// Loop break conditions
-		if err != nil || end || iterator.Entry.Number >= toEntryNum {
+		// Check if end of iterator
+		if end {
 			break
 		}
 
-		if iterator.Entry.Type != EtBookmark {
-			response = append(response, iterator.Entry.Data...)
+		// Get entry data
+		if iterator.GetEntry().Number >= toEntryNum {
+			break
+		}
+
+		if iterator.GetEntry().Type != EtBookmark {
+			response = append(response, iterator.GetEntry().Data...)
 		}
 	}
 
 	// Close iterator
-	s.streamFile.iteratorEnd(iterator)
+	iterator.End()
 
 	return response, err
 }
 
 // clearAtomicOp sets the current atomic operation to none
 func (s *StreamServer) clearAtomicOp() {
-	// No atomic operation in progress and empty entries slice
-	s.atomicOp.entries = s.atomicOp.entries[:0]
-	s.atomicOp.status = aoNone
+	// No atomic operation in progress and empty Entries slice
+	s.atomicOp.Entries = s.atomicOp.Entries[:0]
+	s.atomicOp.Status = aoNone
 }
 
 // broadcastAtomicOp broadcasts committed atomic operations to the clients
 func (s *StreamServer) broadcastAtomicOp() {
-	defer s.streamFile.file.Close()
-	defer s.bookmark.db.Close()
+	defer s.streamStore.Close()
 
 	var err error
 	for {
@@ -713,16 +669,16 @@ func (s *StreamServer) broadcastAtomicOp() {
 		var clientMap = map[string]struct{}{}
 		s.mutexClients.RLock()
 		// For each connected and started client
-		log.Debug("sending datastream entries, count: %d, clients: %d", len(broadcastOp.entries), len(s.clients))
+		log.Debug("sending datastream Entries, count: %d, clients: %d", len(broadcastOp.Entries), len(s.clients))
 		for id, cli := range s.clients {
-			log.Debugf("client %s status %d (%s)", id, cli.status, StrClientStatus[cli.status])
+			log.Debugf("client %s Status %d (%s)", id, cli.status, StrClientStatus[cli.status])
 			clientMap[id] = struct{}{}
 			if cli.status != csSynced {
 				continue
 			}
 
-			// Send entries
-			for _, entry := range broadcastOp.entries {
+			// Send Entries
+			for _, entry := range broadcastOp.Entries {
 				if entry.Number >= cli.fromEntry {
 					log.Debugf("sending data entry %d (type %d) to %s", entry.Number, entry.Type, id)
 
@@ -738,7 +694,7 @@ func (s *StreamServer) broadcastAtomicOp() {
 						// Kill client connection
 						log.Warnf("error sending entry to %s, error: %v", id, err)
 						killedClientMap[id] = struct{}{}
-						break // skip rest of entries for this client
+						break // skip rest of Entries for this client
 					}
 				}
 			}
@@ -758,8 +714,8 @@ func (s *StreamServer) broadcastAtomicOp() {
 			}
 		}
 
-		log.Debugf("sent datastream entries, count: %d, clients: %d, time: %v, clients-ip: {%s}",
-			len(broadcastOp.entries), len(s.clients), time.Since(start), sClients)
+		log.Debugf("sent datastream Entries, count: %d, clients: %d, time: %v, clients-ip: {%s}",
+			len(broadcastOp.Entries), len(s.clients), time.Since(start), sClients)
 	}
 }
 
@@ -925,7 +881,7 @@ func (s *StreamServer) processCmdStart(client *client) error {
 	log.Debugf("Client %s command Start from %d", client.clientID, fromEntry)
 
 	// Check received param
-	if fromEntry > s.nextEntry && fromEntry > s.initEntry {
+	if fromEntry > s.streamStore.GetNextEntry() && fromEntry > s.initEntry {
 		log.Errorf("Start command invalid from entry %d for client %s", fromEntry, client.clientID)
 		err = ErrStartCommandInvalidParamFromEntry
 		_ = s.sendResultEntry(uint32(CmdErrBadFromEntry), StrCommandErrors[CmdErrBadFromEntry], client)
@@ -938,8 +894,8 @@ func (s *StreamServer) processCmdStart(client *client) error {
 		return err
 	}
 
-	// Stream entries data from the requested entry number
-	if fromEntry < s.nextEntry {
+	// Stream Entries data from the requested entry number
+	if fromEntry < s.streamStore.GetNextEntry() {
 		err = s.streamingFromEntry(client, fromEntry)
 	}
 
@@ -971,7 +927,7 @@ func (s *StreamServer) processCmdStartBookmark(client *client) error {
 	log.Debugf("Client %s command StartBookmark [%v]", client.clientID, bookmark)
 
 	// Get bookmark
-	entryNum, err := s.bookmark.GetBookmark(bookmark)
+	entryNum, err := s.streamStore.GetBookmark(bookmark)
 	if err != nil {
 		log.Errorf("StartBookmark command invalid from bookmark %v for client %s: %v", bookmark, client.clientID, err)
 		err = ErrStartBookmarkInvalidParamFromBookmark
@@ -985,9 +941,9 @@ func (s *StreamServer) processCmdStartBookmark(client *client) error {
 		return err
 	}
 
-	// Stream entries data from the entry number marked by the bookmark
+	// Stream Entries data from the entry number marked by the bookmark
 	log.Debugf("Client %s Bookmark [%v] is the entry number [%d]", client.clientID, bookmark, entryNum)
-	if entryNum < s.nextEntry {
+	if entryNum < s.streamStore.GetNextEntry() {
 		err = s.streamingFromEntry(client, entryNum)
 	}
 
@@ -1061,7 +1017,7 @@ func (s *StreamServer) processCmdHeader(client *client) error {
 	}
 
 	// Get current written/committed file header
-	header := s.streamFile.getHeaderEntry()
+	header := s.streamStore.GetHeader()
 	binaryHeader := encodeHeaderEntryToBinary(header)
 
 	// Send header entry to the client
@@ -1180,14 +1136,14 @@ func (s *StreamServer) streamingFromEntry(client *client, fromEntry uint64) erro
 	log.Debugf("SYNCING %s from entry %d...", client.clientID, fromEntry)
 
 	// Start file stream iterator
-	iterator, err := s.streamFile.iteratorFrom(fromEntry, true)
+	iterator, err := s.streamStore.GetIterator(fromEntry, true)
 	if err != nil {
 		return err
 	}
 
-	// Loop data entries from file stream iterator
+	// Loop data Entries from file stream iterator
 	for {
-		end, err := s.streamFile.iteratorNext(iterator)
+		end, err := iterator.Next()
 		if err != nil {
 			return err
 		}
@@ -1198,22 +1154,22 @@ func (s *StreamServer) streamingFromEntry(client *client, fromEntry uint64) erro
 		}
 
 		// Send the file data entry
-		binaryEntry := encodeFileEntryToBinary(iterator.Entry)
-		log.Debugf("Sending data entry %d (type %d) to %s", iterator.Entry.Number, iterator.Entry.Type, client.clientID)
+		binaryEntry := encodeFileEntryToBinary(iterator.GetEntry())
+		log.Debugf("Sending data entry %d (type %d) to %s", iterator.GetEntry().Number, iterator.GetEntry().Type, client.clientID)
 		if client.conn != nil {
 			_, err = TimeoutWrite(client, binaryEntry, s.writeTimeout)
 		} else {
 			err = ErrNilConnection
 		}
 		if err != nil {
-			log.Errorf("Error sending entry %d to %s: %v", iterator.Entry.Number, client.clientID, err)
+			log.Errorf("Error sending entry %d to %s: %v", iterator.GetEntry().Number, client.clientID, err)
 			return err
 		}
 	}
-	log.Debugf("Synced %s until %d!", client.clientID, iterator.Entry.Number)
+	log.Debugf("Synced %s until %d!", client.clientID, iterator.GetEntry().Number)
 
 	// Close iterator
-	s.streamFile.iteratorEnd(iterator)
+	iterator.End()
 
 	return nil
 }
@@ -1309,7 +1265,7 @@ func (s *StreamServer) getSafeClientsLen() int {
 
 // BookmarkPrintDump prints all bookmarks
 func (s *StreamServer) BookmarkPrintDump() {
-	err := s.bookmark.PrintDump()
+	err := s.streamStore.PrintDumpBookmarks()
 	if err != nil {
 		log.Errorf("Error dumping bookmark database")
 	}
