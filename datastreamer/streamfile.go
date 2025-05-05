@@ -30,7 +30,9 @@ const (
 	PtDataRsp = 0xfe // PtDataRsp is packet type for command response with data
 	PtResult  = 0xff // PtResult is packet type not stored/present in file (just for client command result)
 
-	EtBookmark = 0xb0 // EtBookmark is entry type for bookmarks
+	EtBatchEnd   = 0x4  // EtBatchEnd is entry type for batch end
+	EtL2BlockEnd = 0x6  // EtL2BlockEnd is entry type for L2 block end
+	EtBookmark   = 0xb0 // EtBookmark is entry type for bookmarks
 
 	FixedSizeFileEntry   = 17 // FixedSizeFileEntry is the fixed size in bytes for a data file entry (1+4+4+8)
 	FixedSizeResultEntry = 9  // FixedSizeResultEntry is the fixed size in bytes for a result entry (1+4+4)
