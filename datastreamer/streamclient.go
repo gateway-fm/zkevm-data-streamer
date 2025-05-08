@@ -13,7 +13,7 @@ import (
 const (
 	resultsBuffer  = 32  // Buffers for the results channel
 	headersBuffer  = 32  // Buffers for the headers channel
-	entriesBuffer  = 128 // Buffers for the entries channel
+	entriesBuffer  = 128 // Buffers for the Entries channel
 	entryRspBuffer = 32  // Buffers for data command response
 
 	defaultTimeout = 5 * time.Second
@@ -86,7 +86,7 @@ func (c *StreamClient) Start() error {
 	// Goroutine to read from the server all entry types
 	go c.readEntries()
 
-	// Goroutine to consume streaming entries
+	// Goroutine to consume streaming Entries
 	go func() {
 		err := c.getStreaming()
 		if err != nil {
@@ -186,7 +186,7 @@ func (c *StreamClient) execCommand(cmd Command, deferredResult bool,
 	header := HeaderEntry{}
 	entry := FileEntry{}
 
-	// Check status of the client
+	// Check Status of the client
 	if !c.started {
 		log.Errorf("Execute command not allowed. Client is not started")
 		return header, entry, ErrExecCommandNotAllowed
@@ -519,7 +519,7 @@ func (c *StreamClient) readEntries() {
 				c.closeConnection()
 				continue
 			}
-			// Send data to stream entries channel
+			// Send data to stream Entries channel
 			c.entries <- e
 
 		default:
@@ -573,7 +573,7 @@ func (c *StreamClient) GetFromStream() uint64 {
 	return c.fromStream
 }
 
-// GetTotalEntries returns total entries number from the latest header command executed
+// GetTotalEntries returns total Entries number from the latest header command executed
 func (c *StreamClient) GetTotalEntries() uint64 {
 	return c.totalEntries
 }

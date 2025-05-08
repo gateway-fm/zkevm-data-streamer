@@ -45,7 +45,7 @@ func TestWriteAndReadHeader(t *testing.T) {
 
 	sf.header.TotalEntries = 10
 	sf.header.TotalLength = 4096
-	err := sf.writeHeaderEntry()
+	err := sf.WriteHeaderEntry()
 	assert.NoError(t, err)
 
 	err = sf.readHeaderEntry()

@@ -198,8 +198,7 @@ func run(ctx *cli.Context) error {
 	log.Infof(">> Relay server started: port[%d] file[%s] server[%s] log[%s]", cfg.Port, cfg.File, cfg.Server, cfg.Log)
 
 	// Create relay server
-	r, err := datastreamer.NewRelay(cfg.Server, uint16(cfg.Port), streamerVersion, streamerSystemID,
-		StSequencer, cfg.File, cfg.WriteTimeout, cfg.InactivityTimeout, 5*time.Second, nil) //nolint:mnd
+	r, err := datastreamer.NewRelay(cfg.Server, uint16(cfg.Port), streamerVersion, streamerSystemID, StSequencer, cfg.File, cfg.WriteTimeout, cfg.InactivityTimeout, 5*time.Second, nil, nil) //nolint:mnd
 	if err != nil {
 		log.Errorf(">> Relay server: NewRelay error! (%v)", err)
 		return err

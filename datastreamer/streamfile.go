@@ -6,7 +6,10 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gateway-fm/zkevm-data-streamer/log"
 )
@@ -44,7 +47,7 @@ type HeaderEntry struct {
 	SystemID     uint64     // System identifier (e.g. ChainID)
 	streamType   StreamType // 1:Sequencer
 	TotalLength  uint64     // Total bytes used in the file
-	TotalEntries uint64     // Total number of data entries (packet type PtData)
+	TotalEntries uint64     // Total number of data Entries (packet type PtData)
 }
 
 // FileEntry type for a data file entry
@@ -54,6 +57,17 @@ type FileEntry struct {
 	Type       EntryType // 0xb0:Bookmark, 1:Event1, 2:Event2,...
 	Number     uint64    // Entry number (sequential starting with 0)
 	Data       []byte
+}
+
+// NewFileEntry creates a new FileEntry with the provided parameters
+func NewFileEntry(packetType uint8, entryType EntryType, number uint64, data []byte) FileEntry {
+	return FileEntry{
+		packetType: packetType,
+		Length:     FixedSizeFileEntry + uint32(len(data)),
+		Type:       entryType,
+		Number:     number,
+		Data:       data,
+	}
 }
 
 // Encode encodes the file entry to binary bytes
@@ -73,12 +87,175 @@ type StreamFile struct {
 	header      HeaderEntry // Current header in memory (atomic operation in progress)
 	writtenHead HeaderEntry // Current header written in the file
 	mutexHeader sync.Mutex  // Mutex for update header data
+
+	// Atomic operation state
+	atomicOpInProgress bool     // Flag indicating if atomic operation is in progress
+	atomicOp           StreamAO // Atomic operation tracking
+
+	nextEntry uint64 // Next sequential entry number
+	bookmarks *StreamBookmark
+
+	// Stream channel for broadcasting atomic operations
+	streamChannel chan StreamAO
 }
 
-type iteratorFile struct {
-	fromEntry uint64
-	file      *os.File
-	Entry     FileEntry
+func (f *StreamFile) PrintDumpBookmarks() error {
+	return f.bookmarks.PrintDump()
+}
+
+func (f *StreamFile) GetBookmark(bookmark []byte) (uint64, error) {
+	return f.bookmarks.GetBookmark(bookmark)
+}
+
+func (f *StreamFile) AddBookmark(bookmark []byte, entryNum uint64) error {
+	return f.bookmarks.AddBookmark(bookmark, entryNum)
+}
+
+func (f *StreamFile) PrintDump() (error, error) {
+	return f.bookmarks.PrintDump(), nil
+}
+
+func (f *StreamFile) GetNextEntry() uint64 {
+	return f.nextEntry
+}
+
+func (f *StreamFile) GetHeader() HeaderEntry {
+	return f.header
+}
+
+func (f *StreamFile) GetEntry(entryNum uint64) (FileEntry, error) {
+	// Initialize file stream iterator
+	iterator, err := f.GetIterator(entryNum, true)
+	if err != nil {
+		return FileEntry{}, err
+	}
+
+	// Get requested entry data
+	_, err = iterator.Next()
+	if err != nil {
+		return FileEntry{}, err
+	}
+
+	// Close iterator
+	iterator.End()
+
+	return iterator.GetEntry(), nil
+}
+
+// AddStreamEntry adds a new entry in the current atomic operation
+func (f *StreamFile) AddStreamEntry(etype EntryType, data []byte) (uint64, error) {
+	start := time.Now().UnixNano()
+	defer log.Debugf("AddStreamEntry process time: %vns", time.Now().UnixNano()-start)
+
+	// Add to the stream file
+	entryNum, err := f.addStream("Data", etype, data)
+
+	return entryNum, err
+}
+
+// AddStreamBookmark adds a new bookmark in the current atomic operation
+func (f *StreamFile) AddStreamBookmark(bookmark []byte) (uint64, error) {
+	start := time.Now().UnixNano()
+	defer log.Debugf("AddStreamBookmark process time: %vns", time.Now().UnixNano()-start)
+
+	// Add to the stream file
+	entryNum, err := f.addStream("Bookmark", EtBookmark, bookmark)
+	if err != nil {
+		return 0, err
+	}
+
+	// Add to the bookmark index
+	err = f.AddBookmark(bookmark, entryNum)
+	if err != nil {
+		return entryNum, err
+	}
+
+	return entryNum, nil
+}
+
+// addStream adds a new stream entry in the current atomic operation
+func (f *StreamFile) addStream(desc string, etype EntryType, data []byte) (uint64, error) {
+	// Check atomic operation Status
+	if f.atomicOp.Status != aoStarted {
+		log.Errorf("Add stream entry not allowed, AtomicOp is not started")
+		return 0, ErrAddEntryNotAllowed
+	}
+
+	// Generate data entry
+	e := NewFileEntry(PtData, etype, f.nextEntry, data)
+
+	// Log data entry fields
+	log.Debugf("%s entry: %d | %d | %d | %d | %d", desc, e.Number, e.packetType, e.Length, e.Type, len(data))
+
+	// Add entry to the stream file (streamfile now handles atomic operation tracking)
+	err := f.addFileEntry(e)
+	if err != nil {
+		return 0, err
+	}
+
+	// Save the entry in the server's atomic operation tracking
+	f.atomicOp.Entries = append(f.atomicOp.Entries, e)
+
+	// Increase sequential entry number
+	f.nextEntry++
+
+	return e.Number, nil
+}
+
+func (f *StreamFile) RollbackAtomicOp() error {
+	if !f.atomicOpInProgress {
+		return ErrRollbackNotAllowed
+	}
+
+	// Rollback the header in memory to the written state
+	err := f.rollbackHeader()
+	if err != nil {
+		return err
+	}
+
+	// Rollback the entry number
+	f.nextEntry = f.atomicOp.StartEntry
+
+	// Clear atomic operation state
+	f.atomicOpInProgress = false
+
+	return nil
+}
+
+func (f *StreamFile) TruncateFile(num uint64) error {
+	return f.truncateFile(num)
+}
+
+func (f *StreamFile) GetIterator(entryNum uint64, readOnly bool) (StorageIterator, error) {
+	return f.iteratorFrom(entryNum, readOnly)
+}
+
+func (f *StreamFile) UpdateEntryData(entryNum uint64, entryType EntryType, data []byte) error {
+	return f.updateEntryData(entryNum, entryType, data)
+}
+
+func (f *StreamFile) Close() error {
+	f.bookmarks.db.Close()
+	return f.file.Close()
+}
+
+type fileIterator struct {
+	fromEntry  uint64
+	file       *os.File
+	Entry      FileEntry
+	streamFile *StreamFile
+}
+
+func (f *fileIterator) GetEntry() FileEntry {
+	return f.Entry
+}
+
+func (f *fileIterator) Next() (bool, error) {
+	return f.iteratorNext()
+}
+
+func (f *fileIterator) End() {
+	f.iteratorEnd()
 }
 
 // NewStreamFile creates stream file struct and opens or creates the stream binary data file
@@ -91,15 +268,12 @@ func NewStreamFile(fn string, version uint8, systemID uint64, st StreamType) (*S
 		maxLength:  0,
 
 		fileHeader: nil,
-		header: HeaderEntry{
-			packetType:   PtHeader,
-			headLength:   headerSize,
-			Version:      version,
-			SystemID:     systemID,
-			streamType:   st,
-			TotalLength:  0,
-			TotalEntries: 0,
-		},
+		header:     NewHeader(version, systemID, st),
+
+		// Initialize atomic operation state
+		atomicOpInProgress: false,
+
+		nextEntry: 0,
 	}
 
 	// Open (or create) the data stream file
@@ -112,6 +286,18 @@ func NewStreamFile(fn string, version uint8, systemID uint64, st StreamType) (*S
 	printStreamFile(&sf)
 
 	return &sf, err
+}
+
+func NewHeader(version uint8, systemID uint64, st StreamType) HeaderEntry {
+	return HeaderEntry{
+		packetType:   PtHeader,
+		headLength:   headerSize,
+		Version:      version,
+		SystemID:     systemID,
+		streamType:   st,
+		TotalLength:  0,
+		TotalEntries: 0,
+	}
 }
 
 // openCreateFile opens or creates the stream file and performs multiple checks
@@ -145,7 +331,7 @@ func (f *StreamFile) openCreateFile() error {
 
 		err = f.openFileForHeader()
 	default:
-		log.Errorf("Unable to check datastream file status %s: %v", f.fileName, err)
+		log.Errorf("Unable to check datastream file Status %s: %v", f.fileName, err)
 	}
 
 	if err != nil {
@@ -185,6 +371,26 @@ func (f *StreamFile) openCreateFile() error {
 	_, err = f.file.Seek(int64(f.header.TotalLength), io.SeekStart)
 	if err != nil {
 		log.Errorf("Error seeking starting position to write: %v", err)
+		return err
+	}
+
+	// Get the directory and filename separately
+	dir := filepath.Dir(f.fileName)
+	base := filepath.Base(f.fileName)
+	// File does not exist so create it
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return err
+	}
+
+	// Remove any extension from the base filename and add .db
+	baseWithoutExt := strings.TrimSuffix(base, filepath.Ext(base))
+
+	// Initialize the data entry number
+	f.nextEntry = f.GetHeader().TotalEntries
+	name := filepath.Join(dir, baseWithoutExt+".db")
+
+	f.bookmarks, err = NewBookmark(name)
+	if err != nil {
 		return err
 	}
 
@@ -245,7 +451,7 @@ func (f *StreamFile) createHeaderPage() error {
 	}
 
 	// Write header entry
-	err = f.writeHeaderEntry()
+	err = f.WriteHeaderEntry()
 	return err
 }
 
@@ -347,7 +553,7 @@ func (f *StreamFile) readHeaderEntry() error {
 	return nil
 }
 
-// rollbackHeader cancels current file written entries not committed
+// rollbackHeader cancels current file written Entries not committed
 func (f *StreamFile) rollbackHeader() error {
 	// Restore header
 	err := f.readHeaderEntry()
@@ -387,7 +593,7 @@ func PrintHeaderEntry(e HeaderEntry, title string) {
 }
 
 // writeHeaderEntry writes the memory header struct into the file header
-func (f *StreamFile) writeHeaderEntry() error {
+func (f *StreamFile) WriteHeaderEntry() error {
 	// Position at the beginning of the file
 	_, err := f.fileHeader.Seek(magicNumSize, io.SeekStart)
 	if err != nil {
@@ -525,8 +731,13 @@ func (f *StreamFile) checkHeaderConsistency() error {
 	return nil
 }
 
-// AddFileEntry writes new data entry to the data stream file
-func (f *StreamFile) AddFileEntry(e FileEntry) error {
+// addFileEntry writes new data entry to the data stream file
+func (f *StreamFile) addFileEntry(e FileEntry) error {
+	// Check if atomic operation is in progress
+	if !f.atomicOpInProgress {
+		return ErrAddEntryNotAllowed
+	}
+
 	var err error
 
 	// Convert from data struct to bytes stream
@@ -541,7 +752,7 @@ func (f *StreamFile) AddFileEntry(e FileEntry) error {
 		pageRemaining = PageDataSize - (f.header.TotalLength-PageHeaderSize)%PageDataSize
 	}
 	if entryLength > pageRemaining {
-		log.Debugf(">> Fill with pad entries. PageRemaining:%d, EntryLength:%d", pageRemaining, entryLength)
+		log.Debugf(">> Fill with pad Entries. PageRemaining:%d, EntryLength:%d", pageRemaining, entryLength)
 		err = f.fillPagePadEntries()
 		if err != nil {
 			return err
@@ -652,7 +863,7 @@ func DecodeBinaryToFileEntry(b []byte) (FileEntry, error) {
 }
 
 // iteratorFrom initializes iterator to locate a data entry number in the stream file
-func (f *StreamFile) iteratorFrom(entryNum uint64, readOnly bool) (*iteratorFile, error) {
+func (f *StreamFile) iteratorFrom(entryNum uint64, readOnly bool) (*fileIterator, error) {
 	// Check starting entry number
 	if entryNum >= f.writtenHead.TotalEntries {
 		log.Error("Invalid starting entry number for iterator")
@@ -675,9 +886,10 @@ func (f *StreamFile) iteratorFrom(entryNum uint64, readOnly bool) (*iteratorFile
 	}
 
 	// Create iterator struct
-	iterator := iteratorFile{
-		fromEntry: entryNum,
-		file:      file,
+	iterator := fileIterator{
+		fromEntry:  entryNum,
+		file:       file,
+		streamFile: f,
 		Entry: FileEntry{
 			Number: 0,
 		},
@@ -689,10 +901,10 @@ func (f *StreamFile) iteratorFrom(entryNum uint64, readOnly bool) (*iteratorFile
 	return &iterator, err
 }
 
-// iteratorNext gets the next data entry in the file for the iterator, returns the end of entries condition
-func (f *StreamFile) iteratorNext(iterator *iteratorFile) (bool, error) {
+// iteratorNext gets the next data entry in the file for the iterator, returns the end of Entries condition
+func (iterator *fileIterator) iteratorNext() (bool, error) {
 	// Check end of entries condition
-	if iterator.Entry.Number >= f.writtenHead.TotalEntries {
+	if iterator.Entry.Number >= iterator.streamFile.writtenHead.TotalEntries {
 		return true, nil
 	}
 
@@ -722,7 +934,7 @@ func (f *StreamFile) iteratorNext(iterator *iteratorFile) (bool, error) {
 		}
 
 		// Check end of data pages condition
-		if pos+forward >= int64(f.writtenHead.TotalLength) {
+		if pos+forward >= int64(iterator.streamFile.writtenHead.TotalLength) {
 			return true, nil
 		}
 
@@ -786,12 +998,12 @@ func (f *StreamFile) iteratorNext(iterator *iteratorFile) (bool, error) {
 }
 
 // iteratorEnd finalizes the file iterator
-func (f *StreamFile) iteratorEnd(iterator *iteratorFile) {
-	iterator.file.Close()
+func (i *fileIterator) iteratorEnd() {
+	i.file.Close()
 }
 
 // seekEntry uses a file iterator to locate a data entry number using a custom binary search
-func (f *StreamFile) seekEntry(iterator *iteratorFile) error {
+func (f *StreamFile) seekEntry(iterator *fileIterator) error {
 	// Start and end data pages
 	var (
 		avg = 0
@@ -837,7 +1049,7 @@ func (f *StreamFile) seekEntry(iterator *iteratorFile) error {
 			break
 		} else if beg == end {
 			// Should be found in this page
-			err = f.locateEntry(iterator)
+			err = iterator.locateEntry()
 			if err != nil {
 				return err
 			}
@@ -847,7 +1059,7 @@ func (f *StreamFile) seekEntry(iterator *iteratorFile) error {
 			end = avg - 1
 		} else if entryNum < iterator.fromEntry {
 			// Smaller value but could be inside the page, let's check it
-			nextPageEntryNum, err := f.getFirstEntryOnNextPage(iterator)
+			nextPageEntryNum, err := iterator.getFirstEntryOnNextPage()
 			if err != nil {
 				return err
 			}
@@ -857,7 +1069,7 @@ func (f *StreamFile) seekEntry(iterator *iteratorFile) error {
 				beg = avg + 1
 			} else {
 				// First of next page is bigger so should be found in this page
-				err = f.locateEntry(iterator)
+				err = iterator.locateEntry()
 				if err != nil {
 					return err
 				}
@@ -878,16 +1090,16 @@ func (f *StreamFile) seekEntry(iterator *iteratorFile) error {
 }
 
 // getFirstEntryOnNextPage returns the first data entry number on next page using an iterator
-func (f *StreamFile) getFirstEntryOnNextPage(iterator *iteratorFile) (uint64, error) {
+func (i *fileIterator) getFirstEntryOnNextPage() (uint64, error) {
 	// Current file position
-	curpos, err := iterator.file.Seek(0, io.SeekCurrent)
+	curpos, err := i.file.Seek(0, io.SeekCurrent)
 	if err != nil {
 		log.Errorf("Error seeking current pos: %v", err)
 		return 0, err
 	}
 
 	// Check if it is valid the current file position
-	if curpos < PageHeaderSize || curpos > int64(f.writtenHead.TotalLength) {
+	if curpos < PageHeaderSize || curpos > int64(i.streamFile.writtenHead.TotalLength) {
 		log.Errorf("Error current file position outside a data page")
 		return 0, ErrCurrentPositionOutsideDataPage
 	}
@@ -900,12 +1112,12 @@ func (f *StreamFile) getFirstEntryOnNextPage(iterator *iteratorFile) (uint64, er
 		forward = PageDataSize - (curpos-PageHeaderSize)%PageDataSize
 	}
 
-	if curpos+forward >= int64(f.writtenHead.TotalLength) {
+	if curpos+forward >= int64(i.streamFile.writtenHead.TotalLength) {
 		return math.MaxUint64, nil
 	}
 
 	// Seek for the start of next data page
-	_, err = iterator.file.Seek(forward, io.SeekCurrent)
+	_, err = i.file.Seek(forward, io.SeekCurrent)
 	if err != nil {
 		log.Errorf("Error seeking next data page: %v", err)
 		return 0, err
@@ -913,7 +1125,7 @@ func (f *StreamFile) getFirstEntryOnNextPage(iterator *iteratorFile) (uint64, er
 
 	// Read fixed data entry bytes
 	buffer := make([]byte, FixedSizeFileEntry)
-	_, err = iterator.file.Read(buffer)
+	_, err = i.file.Read(buffer)
 	if err != nil {
 		log.Errorf("Error reading entry: %v", err)
 		return 0, err
@@ -929,7 +1141,7 @@ func (f *StreamFile) getFirstEntryOnNextPage(iterator *iteratorFile) (uint64, er
 	entryNum := binary.BigEndian.Uint64(buffer[9:17])
 
 	// Restore file position
-	_, err = iterator.file.Seek(-(forward + FixedSizeFileEntry), io.SeekCurrent)
+	_, err = i.file.Seek(-(forward + FixedSizeFileEntry), io.SeekCurrent)
 	if err != nil {
 		log.Errorf("Error seeking current pos: %v", err)
 		return 0, err
@@ -939,31 +1151,31 @@ func (f *StreamFile) getFirstEntryOnNextPage(iterator *iteratorFile) (uint64, er
 }
 
 // locateEntry locates the entry number we are looking for using the sequential iterator
-func (f *StreamFile) locateEntry(iterator *iteratorFile) error {
+func (i *fileIterator) locateEntry() error {
 	// Seek backward to the start of data entry
-	_, err := iterator.file.Seek(-FixedSizeFileEntry, io.SeekCurrent)
+	_, err := i.file.Seek(-FixedSizeFileEntry, io.SeekCurrent)
 	if err != nil {
 		log.Errorf("Error in file seeking: %v", err)
 		return err
 	}
 
 	for {
-		end, err := f.iteratorNext(iterator)
+		end, err := i.iteratorNext()
 		if err != nil {
 			return err
 		}
 
 		// Not found
-		if end || iterator.Entry.Number > iterator.fromEntry {
-			log.Infof("Error can not locate the data entry number: %d", iterator.fromEntry)
+		if end || i.Entry.Number > i.fromEntry {
+			log.Infof("Error can not locate the data entry number: %d", i.fromEntry)
 			return ErrEntryNotFound
 		}
 
 		// Found!
-		if iterator.Entry.Number == iterator.fromEntry {
+		if i.Entry.Number == i.fromEntry {
 			// Seek backward to the end of fixed data
-			backward := iterator.Entry.Length - FixedSizeFileEntry
-			_, err = iterator.file.Seek(-int64(backward), io.SeekCurrent)
+			backward := i.Entry.Length - FixedSizeFileEntry
+			_, err = i.file.Seek(-int64(backward), io.SeekCurrent)
 			if err != nil {
 				log.Errorf("Error in file seeking: %v", err)
 				return err
@@ -989,7 +1201,7 @@ func (f *StreamFile) updateEntryData(entryNum uint64, etype EntryType, data []by
 	}
 
 	// Get current entry data
-	_, err = f.iteratorNext(iterator)
+	_, err = iterator.iteratorNext()
 	if err != nil {
 		return err
 	}
@@ -1036,7 +1248,7 @@ func (f *StreamFile) updateEntryData(entryNum uint64, etype EntryType, data []by
 	}
 
 	// Close iterator
-	f.iteratorEnd(iterator)
+	iterator.iteratorEnd()
 
 	return nil
 }
@@ -1059,14 +1271,16 @@ func (f *StreamFile) truncateFile(entryNum uint64) error {
 	// Update internal header
 	f.mutexHeader.Lock()
 	f.header.TotalEntries = entryNum
+	//f.nextEntry = entryNum TODO: I think this is write but for consitancy im following the existing
+	f.nextEntry = f.header.TotalEntries
 	f.header.TotalLength = uint64(curpos)
 	f.writtenHead = f.header
 	f.mutexHeader.Unlock()
 
 	// Write the header into the file (commit changes)
-	err = f.writeHeaderEntry()
+	err = f.WriteHeaderEntry()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	// Set new file position to write
@@ -1077,4 +1291,61 @@ func (f *StreamFile) truncateFile(entryNum uint64) error {
 	}
 
 	return nil
+}
+
+// StartAtomicOp starts a new atomic operation
+func (f *StreamFile) StartAtomicOp() error {
+	if f.atomicOpInProgress {
+		return ErrStartAtomicOpNotAllowed
+	}
+
+	start := time.Now().UnixNano()
+	defer log.Debugf("StartAtomicOp process time: %vns", time.Now().UnixNano()-start)
+
+	log.Debugf("!AtomicOp START (%d)", f.nextEntry)
+
+	f.atomicOpInProgress = true
+	f.atomicOp.Status = aoStarted
+	f.atomicOp.StartEntry = f.GetNextEntry()
+	f.atomicOp.Entries = []FileEntry{}
+
+	return nil
+}
+
+// CommitAtomicOp commits the current atomic operation
+func (f *StreamFile) CommitAtomicOp() error {
+	if !f.atomicOpInProgress {
+		return ErrCommitNotAllowed
+	}
+
+	// Update header in the file (commit the new Entries)
+	err := f.WriteHeaderEntry()
+	if err != nil {
+		return err
+	}
+
+	// Clear atomic operation state
+	f.atomicOpInProgress = false
+
+	if f.streamChannel != nil {
+		// Do broadcast of the committed atomic operation to the stream clients
+		atomic := StreamAO{
+			Status:     f.atomicOp.Status,
+			StartEntry: f.atomicOp.StartEntry,
+		}
+		atomic.Entries = make([]FileEntry, len(f.atomicOp.Entries))
+		copy(atomic.Entries, f.atomicOp.Entries)
+
+		f.streamChannel <- atomic
+	}
+
+	f.atomicOp.Entries = f.atomicOp.Entries[:0]
+	f.atomicOp.Status = aoNone
+
+	return nil
+}
+
+// SetStreamChannel sets the stream channel for broadcasting atomic operations
+func (f *StreamFile) SetStreamChannel(stream chan StreamAO) {
+	f.streamChannel = stream
 }

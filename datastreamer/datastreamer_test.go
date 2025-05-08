@@ -204,7 +204,7 @@ func TestServer(t *testing.T) {
 
 	// Create server
 	streamServer, err := datastreamer.NewServer(config.Port, 1, 137, streamType,
-		config.Filename, config.WriteTimeout, config.InactivityTimeout, 5*time.Second, &config.Log)
+		config.Filename, config.WriteTimeout, config.InactivityTimeout, 5*time.Second, &config.Log, nil)
 	require.NoError(t, err)
 
 	// Case: Add entry without starting atomic operation -> FAIL
@@ -217,7 +217,7 @@ func TestServer(t *testing.T) {
 	require.Equal(t, datastreamer.ErrAtomicOpNotAllowed, err)
 	require.Equal(t, uint64(0), entryNumber)
 
-	// Case: Start server, start atomic operation, add entries, commit -> OK
+	// Case: Start server, start atomic operation, add Entries, commit -> OK
 	err = streamServer.Start()
 	require.NoError(t, err)
 
@@ -338,7 +338,7 @@ func TestServer(t *testing.T) {
 		require.Equal(t, testEntries[entryUpdated-1], TestEntry{}.Decode(entry.Data))
 	}
 
-	// Case: Add 3 new entries -> OK
+	// Case: Add 3 new Entries -> OK
 	err = streamServer.StartAtomicOp()
 	require.NoError(t, err)
 
@@ -395,7 +395,7 @@ func TestServer(t *testing.T) {
 	err = streamServer.TruncateFile(5)
 	require.NoError(t, err)
 
-	// Case: Get entries included in previous file truncate (don't exist) -> FAIL
+	// Case: Get Entries included in previous file truncate (don't exist) -> FAIL
 	entry, err = streamServer.GetEntry(6)
 	require.EqualError(t, datastreamer.ErrInvalidEntryNumber, err.Error())
 	require.Equal(t, datastreamer.FileEntry{}, entry)
@@ -411,14 +411,14 @@ func TestServer(t *testing.T) {
 	// Log file header before fill the first data page
 	datastreamer.PrintHeaderEntry(streamServer.GetHeader(), "before fill page")
 
-	// Case: Fill first data page with entries
+	// Case: Fill first data page with Entries
 	entryLength := len(testEntries[4].Encode()) + datastreamer.FixedSizeFileEntry
 	bytesAvailable := datastreamer.PageDataSize - (streamServer.GetHeader().TotalLength - datastreamer.PageHeaderSize)
 	numEntries := bytesAvailable / uint64(entryLength)
 	log.Debugf(">>> totalLength: %d | bytesAvailable: %d | entryLength: %d | numEntries: %d",
 		streamServer.GetHeader().TotalLength, bytesAvailable, entryLength, numEntries)
 
-	lastEntry := entryNumber - 2 // 2 entries truncated
+	lastEntry := entryNumber - 2 // 2 Entries truncated
 	lastEntry--
 	err = streamServer.StartAtomicOp()
 	require.NoError(t, err)

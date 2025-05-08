@@ -13,9 +13,7 @@ type StreamRelay struct {
 }
 
 // NewRelay creates a new data stream relay
-func NewRelay(server string, port uint16, version uint8, systemID uint64,
-	streamType StreamType, fileName string, writeTimeout time.Duration,
-	inactivityTimeout time.Duration, inactivityCheckInterval time.Duration, cfg *log.Config) (*StreamRelay, error) {
+func NewRelay(server string, port uint16, version uint8, systemID uint64, streamType StreamType, fileName string, writeTimeout time.Duration, inactivityTimeout time.Duration, inactivityCheckInterval time.Duration, cfg *log.Config, storageFactory func() (StreamStore, error)) (*StreamRelay, error) {
 	var r StreamRelay
 	var err error
 
@@ -28,7 +26,7 @@ func NewRelay(server string, port uint16, version uint8, systemID uint64,
 
 	// Create server side
 	r.server, err = NewServer(port, version, systemID, streamType, fileName, writeTimeout,
-		inactivityTimeout, inactivityCheckInterval, cfg)
+		inactivityTimeout, inactivityCheckInterval, cfg, storageFactory)
 	if err != nil {
 		log.Errorf("Error creating relay server side: %v", err)
 		return nil, err
@@ -49,7 +47,7 @@ func (r *StreamRelay) Start() error {
 		return err
 	}
 
-	// Get total entries from the master server
+	// Get total Entries from the master server
 	header, err := r.client.ExecCommandGetHeader()
 	if err != nil {
 		log.Errorf("Error executing header command: %v", err)
@@ -87,9 +85,9 @@ func relayEntry(e *FileEntry, c *StreamClient, s *StreamServer) error {
 
 	// Add entry
 	if e.Type == EtBookmark {
-		_, err = s.AddStreamBookmark(e.Data)
+		_, err = s.streamStore.AddStreamBookmark(e.Data)
 	} else {
-		_, err = s.AddStreamEntry(e.Type, e.Data)
+		_, err = s.streamStore.AddStreamEntry(e.Type, e.Data)
 	}
 
 	// Check if error adding entry

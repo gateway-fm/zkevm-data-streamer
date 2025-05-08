@@ -269,7 +269,7 @@ func runServer(ctx *cli.Context) error {
 	// Create stream server
 	s, err := datastreamer.NewServer(uint16(port), streamerVersion, streamerSystemID, StSequencer, file,
 		time.Duration(writeTimeout)*time.Millisecond, time.Duration(inactivityTimeout)*time.Second,
-		5*time.Second, nil) //nolint:mnd
+		5*time.Second, nil, nil) //nolint:mnd
 	if err != nil {
 		return err
 	}
@@ -1064,9 +1064,7 @@ func runRelay(ctx *cli.Context) error {
 	inactivityTimeout := ctx.Uint64("inactivitytimeout")
 
 	// Create relay server
-	r, err := datastreamer.NewRelay(server, uint16(port), streamerVersion, streamerSystemID, StSequencer, file,
-		time.Duration(writeTimeout)*time.Millisecond, time.Duration(inactivityTimeout)*time.Second,
-		5*time.Second, nil) //nolint:mnd
+	r, err := datastreamer.NewRelay(server, uint16(port), streamerVersion, streamerSystemID, StSequencer, file, time.Duration(writeTimeout)*time.Millisecond, time.Duration(inactivityTimeout)*time.Second, 5*time.Second, nil, nil) //nolint:mnd
 	if err != nil {
 		return err
 	}
