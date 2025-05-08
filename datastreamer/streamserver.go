@@ -962,14 +962,14 @@ func (s *StreamServer) processCmdRangeBookmark(client *client) error {
 	}
 	log.Debugf("Client %s command RangeBookmark start: [%v], end [%v]", client.clientID, sb, eb)
 
-	from, err := s.bookmark.GetBookmark(sb)
+	from, err := s.streamStore.GetBookmark(sb)
 	if err != nil {
 		log.Errorf("RangeBookmark command invalid start bookmark %v for client %s: %v", sb, client.clientID, err)
 		err = ErrStartBookmarkInvalidParamFromBookmark
 		_ = s.sendResultEntry(uint32(CmdErrBadFromBookmark), StrCommandErrors[CmdErrBadFromBookmark], client)
 		return err
 	}
-	to, err := s.bookmark.GetBookmark(eb)
+	to, err := s.streamStore.GetBookmark(eb)
 	if err != nil || to == 0 {
 		log.Errorf("RangeBookmark command invalid end bookmark %v for client %s: %v", eb, client.clientID, err)
 		err = ErrEndBookmarkInvalidParamToBookmark
@@ -988,7 +988,7 @@ func (s *StreamServer) processCmdRangeBookmark(client *client) error {
 	binary.BigEndian.PutUint64(be, to)
 	TimeoutWrite(client, be, s.writeTimeout)
 
-	if from >= s.nextEntry || to >= s.nextEntry {
+	if from >= s.GetNextEntry() || to >= s.GetNextEntry() {
 		return ErrInvalidBookmarkRange
 	}
 
@@ -1183,7 +1183,7 @@ func (s *StreamServer) streamingRangeEntry(client *client, fromEntry uint64, toE
 	log.Debugf("SYNCING %s from entry %d to entry %d...", client.clientID, fromEntry, toEntry)
 
 	// Start file stream iterator
-	iterator, err := s.streamFile.iteratorFrom(fromEntry, true)
+	iterator, err := s.streamStore.GetIterator(fromEntry, true)
 	if err != nil {
 		return err
 	}
@@ -1191,32 +1191,33 @@ func (s *StreamServer) streamingRangeEntry(client *client, fromEntry uint64, toE
 	// Loop until we reach the to bookmark
 	for {
 		// Get next entry data
-		end, err := s.streamFile.iteratorNext(iterator)
+		end, err := iterator.Next()
 		if err != nil || end {
 			break
 		}
 
+		entry := iterator.GetEntry()
 		// Send the file data entry
-		binaryEntry := encodeFileEntryToBinary(iterator.Entry)
-		log.Debugf("Sending data entry %d (type %d) to %s", iterator.Entry.Number, iterator.Entry.Type, client.clientID)
+		binaryEntry := encodeFileEntryToBinary(entry)
+		log.Debugf("Sending data entry %d (type %d) to %s", entry.Number, entry.Type, client.clientID)
 		if client.conn != nil {
 			_, err = TimeoutWrite(client, binaryEntry, s.writeTimeout)
 		} else {
 			err = ErrNilConnection
 		}
 		if err != nil {
-			log.Errorf("Error sending entry %d to %s: %v", iterator.Entry.Number, client.clientID, err)
+			log.Errorf("Error sending entry %d to %s: %v", entry.Number, client.clientID, err)
 			return err
 		}
 
-		if iterator.Entry.Number == toEntry {
+		if iterator.GetEntry().Number == toEntry {
 			break
 		}
 	}
-	log.Debugf("Synced %s until %d!", client.clientID, iterator.Entry.Number)
+	log.Debugf("Synced %s until %d!", client.clientID, iterator.GetEntry().Number)
 
 	// Close iterator
-	s.streamFile.iteratorEnd(iterator)
+	iterator.End()
 
 	return nil
 }
