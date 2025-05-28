@@ -24,6 +24,7 @@ install-linter: ## Installs the linter
 
 .PHONY: lint
 lint: ## Runs the linter
+	go version
 	export "GOROOT=$$(go env GOROOT)" && $$(go env GOPATH)/bin/golangci-lint run
 
 .PHONY: build-dsapp
@@ -44,6 +45,7 @@ build-docker-nc: ## Builds a docker image with datastream relay binary but witho
 
 .PHONY: test
 test:
+	go version
 	go test -coverprofile coverage.out -count=1 -short -race -p 1 -timeout 60s ./...
 
 ## Help display.
@@ -56,6 +58,6 @@ help: ## Prints this help
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	| sort \
 	| awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
-	
+
 generate-code-from-proto: ## Generates code from proto files
 	cd proto/datastream/v1 && protoc --proto_path=. --proto_path=../../include --go_out=../../../datastream --go-grpc_out=../../../datastream --go-grpc_opt=paths=source_relative --go_opt=paths=source_relative datastream.proto
