@@ -1,6 +1,6 @@
 module github.com/gateway-fm/zkevm-data-streamer
 
-go 1.22
+go 1.22.3
 toolchain go1.24.1
 
 require (
