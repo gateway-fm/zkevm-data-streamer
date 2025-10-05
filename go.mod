@@ -2,7 +2,6 @@ module github.com/gateway-fm/zkevm-data-streamer
 
 go 1.25
 
-toolchain go1.25.0
 
 require (
 	github.com/ethereum/go-ethereum v1.14.13
