@@ -18,7 +18,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       - name: Download dependencies
-        run: go mod tidy
+        run: go mod download
       - name: Lint
         run: |
           make install-linter
