@@ -266,26 +266,27 @@ func (s *StreamServer) Start() error {
 
 // checkClientInactivity kills all the clients that reach write inactivity timeout
 func (s *StreamServer) checkClientInactivity() {
+	ticker := time.NewTicker(s.inactivityCheckInterval)
+	defer ticker.Stop()
+
 	for {
-		// exit condition
-		if s.stream == nil {
-			return
-		}
-
-		time.Sleep(s.inactivityCheckInterval)
-
-		var clientsToKill = map[string]struct{}{}
-		s.mutexClients.Lock()
-		for _, client := range s.clients {
-			if client.lastActivity.Add(s.inactivityTimeout).Before(time.Now()) {
-				clientsToKill[client.clientID] = struct{}{}
+		select {
+		case <-ticker.C:
+			var clientsToKill = map[string]struct{}{}
+			s.mutexClients.Lock()
+			for _, client := range s.clients {
+				if client.lastActivity.Add(s.inactivityTimeout).Before(time.Now()) {
+					clientsToKill[client.clientID] = struct{}{}
+				}
 			}
-		}
-		s.mutexClients.Unlock()
+			s.mutexClients.Unlock()
 
-		for clientID := range clientsToKill {
-			log.Warnf("killing inactive client %s", clientID)
-			s.killClient(clientID)
+			for clientID := range clientsToKill {
+				log.Warnf("killing inactive client %s", clientID)
+				s.killClient(clientID)
+			}
+		case <-s.stream:
+			return
 		}
 	}
 }
@@ -297,12 +298,12 @@ func (s *StreamServer) waitConnections() {
 	const timeout = 2 * time.Second
 
 	for {
-		if s.ln == nil {
-			return // Exit if listener closed
-		}
-
 		conn, err := s.ln.Accept()
 		if err != nil {
+			// Exit loop if listener is closed
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Errorf("Error accepting new connection: %v", err)
 			time.Sleep(timeout)
 			continue

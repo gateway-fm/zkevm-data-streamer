@@ -105,8 +105,10 @@ func (b *StreamBookmark) PrintDump() error {
 }
 
 func (b *StreamBookmark) Close() error {
-	if b.db != nil {
-		return b.db.Close()
+	if b.db == nil {
+		return nil
 	}
-	return nil
+	err := b.db.Close()
+	b.db = nil
+	return err
 }
