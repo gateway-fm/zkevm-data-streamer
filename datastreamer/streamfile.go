@@ -3,6 +3,7 @@ package datastreamer
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -1083,16 +1084,22 @@ func (f *StreamFile) Close() error {
 	if f.file == nil {
 		return nil
 	}
-	// Write updated header (includes totalEntries count)
-	if err := f.writeHeaderEntry(); err != nil {
-		return err
+
+	writeErr := f.writeHeaderEntry()
+
+	var syncErr error
+	if f.file != nil {
+		syncErr = f.file.Sync()
 	}
-	// Flush data to disk
-	if err := f.file.Sync(); err != nil {
-		return err
+
+	var closeErr error
+	if f.file != nil {
+		closeErr = f.file.Close()
+		f.file = nil
 	}
-	// Close the file
-	err := f.file.Close()
-	f.file = nil
-	return err
+
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		return fmt.Errorf("write: %v, sync: %v, close: %v", writeErr, syncErr, closeErr)
+	}
+	return nil
 }

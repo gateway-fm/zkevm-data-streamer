@@ -1477,18 +1477,19 @@ func (s *StreamServer) Close() error {
 
 	// 2. Disconnect and cleanup all clients
 	s.mutexClients.Lock()
-	for addr, cli := range s.clients {
-		if cli.conn != nil {
-			cli.conn.Close()
-		}
-		delete(s.clients, addr)
+	clientIDs := make([]string, 0, len(s.clients))
+	for id := range s.clients {
+		clientIDs = append(clientIDs, id)
 	}
 	s.mutexClients.Unlock()
+
+	for _, id := range clientIDs {
+		s.killClient(id)
+	}
 
 	// 3. Close stream channel (if needed, might want to drain first)
 	if s.stream != nil {
 		close(s.stream)
-		s.stream = nil
 	}
 
 	// 4. Close StreamFile (flushes header + data to disk)
