@@ -1078,3 +1078,19 @@ func (f *StreamFile) truncateFile(entryNum uint64) error {
 
 	return nil
 }
+
+func (f *StreamFile) Close() error {
+	if f.file != nil {
+		// Write updated header (includes totalEntries count)
+		if err := f.writeHeaderEntry(); err != nil {
+			return err
+		}
+		// Flush data to disk
+		if err := f.file.Sync(); err != nil {
+			return err
+		}
+		// Close the file
+		return f.file.Close()
+	}
+	return nil
+}

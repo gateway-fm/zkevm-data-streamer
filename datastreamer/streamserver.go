@@ -267,6 +267,11 @@ func (s *StreamServer) Start() error {
 // checkClientInactivity kills all the clients that reach write inactivity timeout
 func (s *StreamServer) checkClientInactivity() {
 	for {
+		// exit condition
+		if s.stream == nil {
+			return
+		}
+
 		time.Sleep(s.inactivityCheckInterval)
 
 		var clientsToKill = map[string]struct{}{}
@@ -292,6 +297,10 @@ func (s *StreamServer) waitConnections() {
 	const timeout = 2 * time.Second
 
 	for {
+		if s.ln == nil {
+			return // Exit if listener closed
+		}
+
 		conn, err := s.ln.Accept()
 		if err != nil {
 			log.Errorf("Error accepting new connection: %v", err)
@@ -1451,4 +1460,57 @@ func TimeoutWrite(client *client, data []byte, timeout time.Duration) (int, erro
 	}
 
 	return n, err
+}
+
+// Close gracefully shuts down the StreamServer and releases all resources
+func (s *StreamServer) Close() error {
+	var errs []error
+
+	// 1. Close network listener (stops accepting new connections)
+	if s.ln != nil {
+		if err := s.ln.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close listener: %w", err))
+		}
+		s.ln = nil
+	}
+
+	// 2. Disconnect and cleanup all clients
+	s.mutexClients.Lock()
+	for addr, cli := range s.clients {
+		if cli.conn != nil {
+			cli.conn.Close()
+		}
+		delete(s.clients, addr)
+	}
+	s.mutexClients.Unlock()
+
+	// 3. Close stream channel (if needed, might want to drain first)
+	if s.stream != nil {
+		close(s.stream)
+		s.stream = nil
+	}
+
+	// 4. Close StreamFile (flushes header + data to disk)
+	if s.streamFile != nil {
+		if err := s.streamFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stream file: %w", err))
+		}
+		s.streamFile = nil
+	}
+
+	// 5. Close StreamBookmark database
+	if s.bookmark != nil {
+		if err := s.bookmark.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close bookmark: %w", err))
+		}
+		s.bookmark = nil
+	}
+
+	s.started = false
+
+	// Return combined errors if any
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during close: %v", errs)
+	}
+	return nil
 }
