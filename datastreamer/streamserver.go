@@ -266,21 +266,27 @@ func (s *StreamServer) Start() error {
 
 // checkClientInactivity kills all the clients that reach write inactivity timeout
 func (s *StreamServer) checkClientInactivity() {
+	ticker := time.NewTicker(s.inactivityCheckInterval)
+	defer ticker.Stop()
+
 	for {
-		time.Sleep(s.inactivityCheckInterval)
-
-		var clientsToKill = map[string]struct{}{}
-		s.mutexClients.Lock()
-		for _, client := range s.clients {
-			if client.lastActivity.Add(s.inactivityTimeout).Before(time.Now()) {
-				clientsToKill[client.clientID] = struct{}{}
+		select {
+		case <-ticker.C:
+			var clientsToKill = map[string]struct{}{}
+			s.mutexClients.Lock()
+			for _, client := range s.clients {
+				if client.lastActivity.Add(s.inactivityTimeout).Before(time.Now()) {
+					clientsToKill[client.clientID] = struct{}{}
+				}
 			}
-		}
-		s.mutexClients.Unlock()
+			s.mutexClients.Unlock()
 
-		for clientID := range clientsToKill {
-			log.Warnf("killing inactive client %s", clientID)
-			s.killClient(clientID)
+			for clientID := range clientsToKill {
+				log.Warnf("killing inactive client %s", clientID)
+				s.killClient(clientID)
+			}
+		case <-s.stream:
+			return
 		}
 	}
 }
@@ -294,6 +300,10 @@ func (s *StreamServer) waitConnections() {
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
+			// Exit loop if listener is closed
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Errorf("Error accepting new connection: %v", err)
 			time.Sleep(timeout)
 			continue
@@ -1451,4 +1461,58 @@ func TimeoutWrite(client *client, data []byte, timeout time.Duration) (int, erro
 	}
 
 	return n, err
+}
+
+// Close gracefully shuts down the StreamServer and releases all resources
+func (s *StreamServer) Close() error {
+	var errs []error
+
+	// 1. Close network listener (stops accepting new connections)
+	if s.ln != nil {
+		if err := s.ln.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close listener: %w", err))
+		}
+		s.ln = nil
+	}
+
+	// 2. Disconnect and cleanup all clients
+	s.mutexClients.Lock()
+	clientIDs := make([]string, 0, len(s.clients))
+	for id := range s.clients {
+		clientIDs = append(clientIDs, id)
+	}
+	s.mutexClients.Unlock()
+
+	for _, id := range clientIDs {
+		s.killClient(id)
+	}
+
+	// 3. Close stream channel (if needed, might want to drain first)
+	if s.stream != nil {
+		close(s.stream)
+	}
+
+	// 4. Close StreamFile (flushes header + data to disk)
+	if s.streamFile != nil {
+		if err := s.streamFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close stream file: %w", err))
+		}
+		s.streamFile = nil
+	}
+
+	// 5. Close StreamBookmark database
+	if s.bookmark != nil {
+		if err := s.bookmark.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close bookmark: %w", err))
+		}
+		s.bookmark = nil
+	}
+
+	s.started = false
+
+	// Return combined errors if any
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during close: %v", errs)
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package datastreamer
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -1076,5 +1077,29 @@ func (f *StreamFile) truncateFile(entryNum uint64) error {
 		return err
 	}
 
+	return nil
+}
+
+func (f *StreamFile) Close() error {
+	if f.file == nil {
+		return nil
+	}
+
+	writeErr := f.writeHeaderEntry()
+
+	var syncErr error
+	if f.file != nil {
+		syncErr = f.file.Sync()
+	}
+
+	var closeErr error
+	if f.file != nil {
+		closeErr = f.file.Close()
+		f.file = nil
+	}
+
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		return fmt.Errorf("write: %v, sync: %v, close: %v", writeErr, syncErr, closeErr)
+	}
 	return nil
 }
