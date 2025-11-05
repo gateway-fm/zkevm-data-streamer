@@ -293,12 +293,19 @@ func (s *StreamServer) checkClientInactivity() {
 
 // waitConnections waits for a new client connection and creates a goroutine to manages it
 func (s *StreamServer) waitConnections() {
-	defer s.ln.Close()
+
+	// capture listener locally to avoid race / nil deref if s.Close() sets s.ln = nil
+	ln := s.ln
+	if ln == nil {
+		return
+	}
+
+	defer ln.Close()
 
 	const timeout = 2 * time.Second
 
 	for {
-		conn, err := s.ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			// Exit loop if listener is closed
 			if errors.Is(err, net.ErrClosed) {
@@ -1472,7 +1479,6 @@ func (s *StreamServer) Close() error {
 		if err := s.ln.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close listener: %w", err))
 		}
-		s.ln = nil
 	}
 
 	// 2. Disconnect and cleanup all clients
