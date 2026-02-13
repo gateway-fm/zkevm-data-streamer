@@ -668,6 +668,11 @@ func (f *StreamFile) iteratorFrom(entryNum uint64, readOnly bool) (*iteratorFile
 		flag = os.O_RDWR
 	}
 
+	// Validate file path
+	if strings.Contains(f.fileName, "../") || strings.Contains(f.fileName, "..\\") {
+		log.Error("Invalid file path")
+		return nil, fmt.Errorf("invalid input")
+	}
 	// Open file for read only
 	file, err := os.OpenFile(f.fileName, flag, os.ModePerm)
 	if err != nil {
