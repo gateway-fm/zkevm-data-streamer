@@ -104,11 +104,10 @@ var (
 		},
 		WriteTimeout: 3 * time.Second,
 	}
-	leveldb      = config.Filename[0:strings.IndexRune(config.Filename, '.')] + ".db"
-	streamServer *datastreamer.StreamServer
-	streamType   = datastreamer.StreamType(1)
-	entryType1   = datastreamer.EntryType(1)
-	entryType2   = datastreamer.EntryType(2)
+	leveldb    = config.Filename[0:strings.IndexRune(config.Filename, '.')] + ".db"
+	streamType = datastreamer.StreamType(1)
+	entryType1 = datastreamer.EntryType(1)
+	entryType2 = datastreamer.EntryType(2)
 
 	testEntries = []TestEntry{
 		{
@@ -198,7 +197,7 @@ func deleteFiles() error {
 
 func TestServer(t *testing.T) {
 	// Note: TestClient depends on the state created by TestServer
-	// TODO: Refactor tests to be independent of each other
+	// Note: TestClient depends on the state created by TestServer
 	err := deleteFiles()
 	require.NoError(t, err)
 
