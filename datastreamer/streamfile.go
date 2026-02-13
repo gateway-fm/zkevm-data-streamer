@@ -3,7 +3,7 @@ package datastreamer
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
 	"math"
 	"os"
@@ -1099,7 +1099,7 @@ func (f *StreamFile) Close() error {
 	}
 
 	if writeErr != nil || syncErr != nil || closeErr != nil {
-		return fmt.Errorf("write: %v, sync: %v, close: %v", writeErr, syncErr, closeErr)
+		return errors.Join(writeErr, syncErr, closeErr)
 	}
 	return nil
 }

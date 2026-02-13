@@ -293,7 +293,6 @@ func (s *StreamServer) checkClientInactivity() {
 
 // waitConnections waits for a new client connection and creates a goroutine to manages it
 func (s *StreamServer) waitConnections() {
-
 	// capture listener locally to avoid race / nil deref if s.Close() sets s.ln = nil
 	ln := s.ln
 	if ln == nil {
@@ -1045,9 +1044,10 @@ func (s *StreamServer) processCmdRangeBookmark(client *client) error {
 	}
 
 	// Send toEntry
-	be := make([]byte, 8)
+	const uint64Size = 8
+	be := make([]byte, uint64Size)
 	binary.BigEndian.PutUint64(be, to)
-	TimeoutWrite(client, be, s.writeTimeout)
+	_, _ = TimeoutWrite(client, be, s.writeTimeout)
 
 	if from >= s.nextEntry || to >= s.nextEntry {
 		return ErrInvalidBookmarkRange
