@@ -15,7 +15,7 @@ COPY Makefile version.go config/environments/testnet/config.toml /src/
 RUN make build-dsrelay
 
 # CONTAINER FOR RUNNING BINARY
-FROM alpine:3.19.0
+FROM alpine:3.21
 
 COPY --from=build /src/dist/dsrelay /app/dsrelay
 COPY --from=build /src/config.toml /app/sample.config.toml
