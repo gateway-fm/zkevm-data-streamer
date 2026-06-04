@@ -52,7 +52,7 @@
               name: code-coverage-report
 
           - name: SonarCloud analysis
-            uses: SonarSource/sonarcloud-github-action@ba3875ecf642b2129de2b589510c81a8b53dbf4e # master
+            uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
             env:
               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
