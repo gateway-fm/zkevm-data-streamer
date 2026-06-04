@@ -15,10 +15,10 @@
         runs-on: ubuntu-latest
         steps:
         - name: Checkout code
-          uses: actions/checkout@v3
+          uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
     
         - name: Install Go
-          uses: actions/setup-go@v3
+          uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3
           with:
             go-version: ${{ matrix.go-version }}
           env:
@@ -30,7 +30,7 @@
 
 
         - name: Archive code coverage results
-          uses: actions/upload-artifact@v4
+          uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
           with:
             name: code-coverage-report
             path: coverage.out
@@ -41,18 +41,18 @@
         runs-on: ubuntu-latest
         steps:
           - name: Checkout Code
-            uses: actions/checkout@v3
+            uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
             with:
               submodules: recursive
               fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
 
           - name: Download code coverage results
-            uses: actions/download-artifact@v4
+            uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
             with:
               name: code-coverage-report
 
           - name: SonarCloud analysis
-            uses: SonarSource/sonarcloud-github-action@master
+            uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
             env:
               GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
